@@ -154,6 +154,9 @@ cython_debug/
 *.code-workspace
 .ionide/
 
+# Cursor IDE
+.cursor/
+
 # Docker
 .dockerignore
 # Not ignoring docker-compose.yml as it is usually part of the repo
@@ -163,6 +166,9 @@ cython_debug/
 *.bak
 *.swp
 *.tmp
+
+# Uploaded media files
+uploads/
 
 # Commit messages
 commit_message.txt
