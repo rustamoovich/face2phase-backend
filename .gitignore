@@ -169,6 +169,7 @@ cython_debug/
 
 # Uploaded media files
 uploads/
+temp/
 
 # Commit messages
 commit_message.txt

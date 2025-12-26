@@ -11,4 +11,8 @@ bcrypt==4.0.1
 email-validator
 python-jose[cryptography]
 python-multipart
+insightface
+onnxruntime
+opencv-python-headless
+numpy
 

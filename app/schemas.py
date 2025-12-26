@@ -60,3 +60,22 @@ class MediaUploadResponse(BaseModel):
     uploaded_count: int
     media_ids: list[uuid.UUID]
 
+# Biometrics schemas
+class BiometricsUploadResponse(BaseModel):
+    status: str
+    message: str
+    confidence: float
+
+# Feed schemas
+class FaceMatchResult(BaseModel):
+    media_item_id: uuid.UUID
+    event_id: uuid.UUID
+    event_title: str
+    similarity_score: float
+    thumbnail_path: Optional[str] = None
+    original_path: str
+
+class MyMomentsResponse(BaseModel):
+    total_matches: int
+    matches: list[FaceMatchResult]
+

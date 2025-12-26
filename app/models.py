@@ -102,3 +102,4 @@ class DetectedFace(Base):
     # Relationships
     media_item: Mapped["MediaItem"] = relationship("MediaItem", back_populates="detected_faces")
 
+
