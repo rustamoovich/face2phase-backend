@@ -15,4 +15,6 @@ insightface
 onnxruntime
 opencv-python-headless
 numpy
+boto3
+aioboto3
 

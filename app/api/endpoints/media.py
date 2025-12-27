@@ -12,26 +12,28 @@ from app.models import Event, MediaItem, User, DetectedFace
 from app.schemas import MediaUploadResponse, MediaItemResponse
 from app.api.deps import get_current_user
 from app.services.face_service import get_face_service
+from app.services.storage_service import get_storage_service
 
 router = APIRouter(prefix="/events", tags=["media"])
 
-UPLOAD_DIR = Path("uploads")
+TEMP_DIR = Path("temp")
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
-async def process_faces_task(media_item_id: uuid.UUID, file_path: str):
+async def process_faces_task(media_item_id: uuid.UUID, temp_file_path: str):
     """
     Фоновая задача для обработки лиц на изображении.
     
     Args:
         media_item_id: ID медиафайла в базе данных
-        file_path: Путь к файлу на диске
+        temp_file_path: Временный путь к файлу на диске (будет удален после обработки)
     """
     try:
         # Получение сервиса распознавания лиц
         face_service = get_face_service()
         
         # Обработка изображения
-        faces = face_service.process_image(file_path, min_confidence=0.6)
+        faces = face_service.process_image(temp_file_path, min_confidence=0.6)
         
         # Сохранение результатов в БД
         async with AsyncSessionLocal() as db:
@@ -70,6 +72,10 @@ async def process_faces_task(media_item_id: uuid.UUID, file_path: str):
             if media_item:
                 media_item.ai_status = "failed"
                 await db.commit()
+    finally:
+        # Удаляем временный файл
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
 
 
 @router.post("/{event_id}/upload", response_model=MediaUploadResponse)
@@ -86,6 +92,7 @@ async def upload_media(
     Требования:
     - Пользователь должен быть организатором этого мероприятия
     - Поддерживается загрузка множественных файлов
+    - Файлы сохраняются в Cloudflare R2
     - После загрузки автоматически запускается обработка лиц
     """
     # Проверка существования мероприятия
@@ -105,10 +112,7 @@ async def upload_media(
             detail="Not enough privileges"
         )
     
-    # Создание папки для мероприятия
-    event_upload_dir = UPLOAD_DIR / str(event_id)
-    event_upload_dir.mkdir(parents=True, exist_ok=True)
-    
+    storage_service = get_storage_service()
     uploaded_media_ids = []
     
     for file in files:
@@ -119,37 +123,51 @@ async def upload_media(
         # Генерация уникального имени файла
         file_extension = Path(file.filename).suffix if file.filename else ""
         unique_filename = f"{uuid.uuid4()}{file_extension}"
-        file_path = event_upload_dir / unique_filename
         
-        # Сохранение файла
+        # Путь в R2: events/{event_id}/original/{unique_filename}
+        r2_key = f"events/{event_id}/original/{unique_filename}"
+        
+        # Чтение файла
         try:
             contents = await file.read()
-            with open(file_path, "wb") as f:
-                f.write(contents)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to save file: {str(e)}"
+                detail=f"Failed to read file: {str(e)}"
             )
         
-        # Создание записи в БД
+        # Загрузка в R2
+        try:
+            await storage_service.upload_file(contents, r2_key, content_type)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to upload file to storage: {str(e)}"
+            )
+        
+        # Создание записи в БД с ключом R2
         db_media = MediaItem(
             event_id=event_id,
-            original_path=str(file_path),
+            original_path=r2_key,  # Теперь храним ключ R2, а не локальный путь
             media_type=media_type,
             ai_status="pending"
         )
         
         db.add(db_media)
-        await db.flush()  # Чтобы получить ID до commit
+        await db.flush()
         uploaded_media_ids.append(db_media.id)
         
-        # Запуск фоновой задачи обработки лиц (только для изображений)
+        # Для обработки лиц нужен локальный файл
+        # Сохраняем временно
         if media_type == "image":
+            temp_file_path = TEMP_DIR / f"{db_media.id}{file_extension}"
+            with open(temp_file_path, "wb") as f:
+                f.write(contents)
+            
             background_tasks.add_task(
                 process_faces_task,
                 media_item_id=db_media.id,
-                file_path=str(file_path)
+                temp_file_path=str(temp_file_path)
             )
     
     await db.commit()

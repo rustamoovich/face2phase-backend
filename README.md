@@ -1,241 +1,258 @@
-# Техническое Задание на разработку платформы Face2Phase
+# Face2Phase Backend
 
-**Версия:** 1.0  
-**Дата:** 19.12.2025  
-**Название проекта:** Face2Phase  
-**Слоган:** Stop searching. Start sharing.
+**Version:** 1.0  
+**Status:** 🚀 Production Ready (MVP)
 
----
-
-## 1. Общее описание проекта
-**Face2Phase** — это SaaS-платформа для автоматизированного поиска и дистрибуции медиаконтента (фото/видео) с мероприятий с использованием технологий компьютерного зрения.
-
-**Ключевая ценность:** Участники мероприятий не ищут свои фото вручную. Они делают селфи, а система мгновенно выдает им персональную ленту контента, где они присутствуют.
-
-### 1.1. Архитектура системы
-Система состоит из трех изолированных приложений и общего бэкенда:
-1. **Mobile App (iOS/Android):** Клиентская часть для участников (поиск фото, скачивание).
-2. **Web Dashboard:** Кабинет для организаторов и фотографов (загрузка контента, аналитика).
-3. **Backend API + AI Worker:** Серверная часть, база данных, очереди задач и модуль распознавания лиц.
+Бэкенд для платформы автоматизированного поиска фотографий с мероприятий с использованием распознавания лиц.
 
 ---
 
-## 2. Технологический стек (Жесткие требования)
+## 📋 Содержание
 
-### 2.1. Backend & Infrastructure
-- **Язык:** Python 3.11+
-- **Framework:** FastAPI (асинхронный).
-- **Database:** PostgreSQL 15+ с расширением `pgvector`.
-- **Task Queue:** Redis + Celery (для фоновой обработки фото).
-- **AI Engine:** InsightFace (ArcFace) + ONNX Runtime (для ускорения).
-- **Storage:** Cloudflare R2 (S3-compatible API).
-- **Deploy:** Docker, Docker Compose (для Dev), Kubernetes/Docker Swarm (для Prod).
-
-### 2.2. Frontend (Web)
-- **Framework:** Vue.js 3 (Composition API) + Vite.
-- **UI Kit:** Tailwind CSS или PrimeVue.
-
-### 2.3. Mobile App
-- **Framework:** Flutter (Dart).
-- **Target:** iOS, Android.
+- [О проекте](#о-проекте)
+- [Технологический стек](#технологический-стек)
+- [Быстрый старт](#быстрый-старт)
+- [Структура проекта](#структура-проекта)
+- [API Endpoints](#api-endpoints)
+- [Настройка Cloudflare R2](#настройка-cloudflare-r2)
+- [Развертывание](#развертывание)
 
 ---
 
-## 3. Функциональные требования
+## О проекте
 
-### 3.1. Мобильное приложение (Гость/Участник)
-#### 3.1.1. Регистрация и Онбординг
-- Вход через Apple ID / Google / Email.
-- **Биометрический онбординг:** Пользователь должен сделать селфи или загрузить портретное фото.
-- **Валидация селфи:** AI должен проверить, что на фото одно лицо, оно четкое и открытое.
+**Face2Phase** — SaaS-платформа для автоматизированного поиска медиаконтента с мероприятий.
 
-#### 3.1.2. Лента "Мои моменты" (Main Feed)
-- Приложение запрашивает у бэкенда список медиафайлов, совпадающих с вектором лица пользователя.
-- Отображение фото в виде ленты (как в Instagram) или сетки.
-- Водяные знаки на превью (если контент платный — опционально на будущее).
+**Ключевая фича:** Участник делает селфи → Система мгновенно выдает все фото, где он присутствует.
 
-#### 3.1.3. Взаимодействие с контентом
-- **Просмотр:** Открытие фото на полный экран (зум, пан).
-- **Скачивание:** Сохранение оригинала в галерею телефона.
-- **Шаринг:** Нативная кнопка "Поделиться" (отправка в Instagram Stories, Telegram и т.д.).
-- **Жалоба:** "Это не я" (для дообучения модели или скрытия фото).
+### Как это работает?
 
-#### 3.1.4. Профиль
-- **Управление биометрией:** "Обновить мое селфи".
-- **Управление приватностью:** "Удалить все мои биометрические данные" (Hard delete из базы).
-
-### 3.2. Веб-панель (Организатор/Фотограф)
-#### 3.2.1. Управление мероприятиями
-- Создание мероприятия (Название, Дата, Место, Обложка).
-- Генерация QR-кода мероприятия (для приглашения участников скачать приложение).
-
-#### 3.2.2. Загрузка контента (Uploader)
-- Drag-n-Drop интерфейс для загрузки папок с фото/видео.
-- Поддержка мультизагрузки (1000+ файлов за раз).
-- Отображение прогресса загрузки и статуса обработки (Processing / Done).
-
-#### 3.2.3. Аналитика
-- **Дашборд:**
-  - Всего фото загружено.
-  - Количество уникальных лиц найдено.
-  - Сколько пользователей нашли себя (Match rate).
-
-### 3.3. Backend и AI (Логика работы)
-#### 3.3.1. Пайплайн обработки фото (Worker)
-1. Получение задачи из очереди (путь к файлу в R2).
-2. Загрузка изображения в память.
-3. **Детекция:** Обнаружение всех лиц на фото (Bounding Boxes).
-4. **Векторизация:** Генерация эмбеддинга (512 float) для каждого лица.
-5. **Quality Check:** Отсеивание слишком размытых или мелких лиц (порог качества настраиваемый).
-6. **Сохранение:** Запись метаданных и векторов в таблицу `detected_faces`.
-
-#### 3.3.2. Алгоритм поиска (Matching)
-- Использование оператора `<=>` (cosine distance) из `pgvector`.
-- Поиск должен занимать не более 2 секунд при базе до 1 млн векторов.
+1. **Организатор** загружает фото с мероприятия
+2. **AI Worker** находит лица и создает векторные эмбеддинги (InsightFace)
+3. **Участник** загружает селфи → система ищет похожие лица через pgvector
+4. **Результат:** Персональная лента фото с мероприятия за 2 секунды
 
 ---
 
-## 4. Структура Базы Данных (Схема)
+## Технологический стек
 
-Исполнитель обязан реализовать схему БД с использованием UUID для идентификаторов.
+- **FastAPI** - асинхронный веб-фреймворк
+- **PostgreSQL 15+ + pgvector** - база данных с векторным поиском
+- **InsightFace (buffalo_l)** - детекция и векторизация лиц
+- **Cloudflare R2** - S3-совместимое облачное хранилище
+- **SQLAlchemy (Async)** - ORM
+- **Pydantic** - валидация данных
+- **JWT** - аутентификация
 
-### Подготовка БД
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
+---
+
+## Быстрый старт
+
+### 1. Клонирование репозитория
+
+```bash
+git clone https://github.com/yourusername/face2phase-backend.git
+cd face2phase-backend
 ```
 
-### Таблицы
+### 2. Запуск PostgreSQL с pgvector
 
-#### 1. Пользователи и Организаторы (`users`)
-```sql
-CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    full_name VARCHAR(100),
-    role VARCHAR(20) DEFAULT 'user', -- 'user', 'organizer', 'admin'
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+```bash
+docker-compose up -d
 ```
 
-#### 2. Биометрия пользователя (`user_biometrics`)
-```sql
-CREATE TABLE user_biometrics (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    
-    -- Цифровой слепок лица (модель InsightFace)
-    embedding vector(512), 
-    
-    -- Ссылка на исходное селфи в Cloudflare R2
-    source_image_path VARCHAR(255), 
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+### 3. Создание виртуального окружения
+
+```bash
+python -m venv venv
+source venv/bin/activate  # На Windows: venv\Scripts\activate
 ```
 
-#### 3. Мероприятия (`events`)
-```sql
-CREATE TABLE events (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    organizer_id UUID REFERENCES users(id),
-    title VARCHAR(200) NOT NULL,
-    description TEXT,
-    event_date DATE,
-    location VARCHAR(200),
-    cover_image_path VARCHAR(255),
-    status VARCHAR(20) DEFAULT 'draft', -- 'draft', 'published', 'archived'
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+### 4. Установка зависимостей
+
+```bash
+pip install -r requirements.txt
 ```
 
-#### 4. Медиафайлы (`media_items`)
-```sql
-CREATE TABLE media_items (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_id UUID REFERENCES events(id) ON DELETE CASCADE,
-    original_path VARCHAR(255) NOT NULL,
-    thumbnail_path VARCHAR(255),
-    media_type VARCHAR(10) DEFAULT 'image', -- 'image' или 'video'
-    ai_status VARCHAR(20) DEFAULT 'pending', -- 'pending', 'processed', 'failed'
-    uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+### 5. Настройка переменных окружения
+
+Скопируйте `.env.example` в `.env` и заполните:
+
+```env
+# Database
+POSTGRES_USER=user
+POSTGRES_PASSWORD=password
+POSTGRES_DB=face2phase_db
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+
+# JWT Security
+SECRET_KEY=your-super-secret-key-change-in-production
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# Cloudflare R2
+R2_ENDPOINT_URL=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=your-r2-access-key-id
+R2_SECRET_ACCESS_KEY=your-r2-secret-access-key
+R2_BUCKET_NAME=face2phase
+R2_PUBLIC_URL=https://cdn.yourdomain.com
 ```
 
-#### 5. Найденные лица (`detected_faces`)
-```sql
-CREATE TABLE detected_faces (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    media_item_id UUID REFERENCES media_items(id) ON DELETE CASCADE,
-    embedding vector(512),
-    bounding_box JSONB, -- {"x": 100, "y": 200, "w": 50, "h": 60}
-    confidence FLOAT
-);
+### 6. Инициализация базы данных
 
--- Индекс для молниеносного поиска (IVFFlat)
-CREATE INDEX ON detected_faces USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+```bash
+python init_db.py
+```
+
+### 7. Запуск сервера
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Сервер доступен по адресу: **http://localhost:8000**
+
+Swagger документация: **http://localhost:8000/docs**
+
+---
+
+## Структура проекта
+
+```
+face2phase-backend/
+├── app/
+│   ├── api/
+│   │   ├── endpoints/
+│   │   │   ├── auth.py         # Регистрация, логин
+│   │   │   ├── events.py       # Управление мероприятиями
+│   │   │   ├── media.py        # Загрузка медиафайлов
+│   │   │   └── biometrics.py   # Биометрия, поиск "Мои моменты"
+│   │   └── deps.py             # Зависимости (get_current_user)
+│   ├── core/
+│   │   └── security.py         # JWT, хэширование паролей
+│   ├── services/
+│   │   ├── face_service.py     # InsightFace обработка
+│   │   └── storage_service.py  # Cloudflare R2 интеграция
+│   ├── database.py             # Конфигурация БД
+│   ├── models.py               # SQLAlchemy модели
+│   ├── schemas.py              # Pydantic схемы
+│   └── main.py                 # Точка входа FastAPI
+├── docs/
+│   └── CLOUDFLARE_R2_SETUP.md  # Инструкция по настройке R2
+├── docker-compose.yml          # PostgreSQL + pgvector
+├── requirements.txt            # Зависимости Python
+├── init_db.py                  # Скрипт инициализации БД
+├── .env                        # Переменные окружения (не в git)
+└── README.md                   # Этот файл
 ```
 
 ---
 
-## 5. Логика работы поиска ("Под капотом")
+## API Endpoints
 
-При запросе ленты "Мои моменты" бэкенд выполняет поиск совпадений по вектору лица:
+### 🔐 Аутентификация
 
-```sql
-SELECT 
-    media_items.original_path, 
-    media_items.thumbnail_path,
-    events.title
-FROM detected_faces
-JOIN media_items ON detected_faces.media_item_id = media_items.id
-JOIN events ON media_items.event_id = events.id
-JOIN user_biometrics ON user_biometrics.user_id = :current_user_id
-WHERE 
-    -- Оператор <=> считает косинусное расстояние
-    -- 0.4 — порог схожести (калибруется)
-    detected_faces.embedding <=> user_biometrics.embedding < 0.4
-ORDER BY 
-    detected_faces.embedding <=> user_biometrics.embedding ASC
-LIMIT 100;
+| Метод | Endpoint | Описание |
+|-------|----------|----------|
+| POST | `/auth/register` | Регистрация пользователя |
+| POST | `/auth/login` | Вход (получение JWT токена) |
+| GET | `/auth/me` | Получить текущего пользователя |
+| POST | `/auth/biometrics` | Загрузить селфи для биометрии |
+
+### 🎉 Мероприятия
+
+| Метод | Endpoint | Описание |
+|-------|----------|----------|
+| POST | `/events/` | Создать мероприятие (только организатор) |
+| GET | `/events/` | Получить список своих мероприятий |
+| GET | `/events/{event_id}/media` | Список медиафайлов мероприятия |
+
+### 📸 Медиафайлы
+
+| Метод | Endpoint | Описание |
+|-------|----------|----------|
+| POST | `/events/{event_id}/upload` | Загрузить фото/видео (массовая загрузка) |
+| GET | `/events/media/{media_item_id}/faces` | Получить найденные лица на фото |
+
+### 🔍 Поиск
+
+| Метод | Endpoint | Описание |
+|-------|----------|----------|
+| GET | `/feed/my-moments` | Получить все фото, где найдено лицо пользователя |
+
+---
+
+## Настройка Cloudflare R2
+
+**Cloudflare R2** — это S3-совместимое хранилище с **нулевой стоимостью исходящего трафика**.
+
+### Почему R2, а не AWS S3?
+
+| Параметр | AWS S3 | Cloudflare R2 |
+|----------|--------|---------------|
+| Хранение (за ГБ) | $0.023 | $0.015 |
+| Исходящий трафик | $0.09/ГБ | **$0 (бесплатно!)** |
+| S3 API | ✅ | ✅ |
+| Интеграция с CDN | CloudFront ($) | Cloudflare (бесплатно) |
+
+**Экономия для проекта с 1 ТБ трафика в месяц: ~$90/мес**
+
+### Подробная инструкция
+
+Смотрите полную инструкцию: **[docs/CLOUDFLARE_R2_SETUP.md](docs/CLOUDFLARE_R2_SETUP.md)**
+
+---
+
+## Развертывание
+
+### Production (Docker)
+
+1. Соберите образ:
+```bash
+docker build -t face2phase-backend .
+```
+
+2. Запустите контейнеры:
+```bash
+docker-compose -f docker-compose.prod.yml up -d
+```
+
+### CI/CD (GitHub Actions)
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build and Deploy
+        run: |
+          docker build -t face2phase-backend .
+          docker push your-registry/face2phase-backend:latest
 ```
 
 ---
 
-## 6. Требования к безопасности
-- **Биометрия:** Запрещено хранить исходные фото лиц пользователей в открытом виде. Хранить только векторные представления (числовые массивы).
-- **API Security:** Все запросы должны быть подписаны JWT токеном.
-- **Доступ к файлам:** Прямые ссылки на S3/R2 запрещены. Использовать Presigned URLs со временем жизни (TTL) 15-60 минут. В базе хранить только относительные пути.
+## 📝 Лицензия
+
+MIT License
 
 ---
 
-## 7. Нефункциональные требования
-- **Производительность:** Система должна обрабатывать 1 фотографию (детекция + векторизация) не дольше 1-2 секунд на GPU (T4/Tesla) или 3-5 секунд на быстром CPU.
-- **Масштабируемость:** Архитектура должна позволять запуск нескольких AI-воркеров параллельно.
-- **Отказоустойчивость:** При ошибке обработки одного фото (битый файл) весь процесс загрузки не должен останавливаться.
+## 👥 Команда
+
+- **Backend:** FastAPI + InsightFace
+- **Database:** PostgreSQL + pgvector
+- **Storage:** Cloudflare R2
+- **Deploy:** Docker + Kubernetes
 
 ---
 
-## 8. Рекомендации для разработчиков
-- **Вектор (512):** Обязательно согласовать размерность вектора в базе и в модели InsightFace. Несовпадение вызовет ошибку БД.
-- **Порог (Threshold):** Значение `0.4` — ориентировочное. Требуется калибровка на реальных данных для минимизации False Positives/Negatives.
-- **Cloudflare R2:** Используйте Presigned URLs для выдачи контента клиентам. Никогда не делайте бакет публичным.
-
----
-
-## 9. Этапы сдачи работ (Milestones)
-
-### Этап 1: Прототип (Backend + AI)
-- Развернут сервер FastAPI + Postgres.
-- Реализован скрипт загрузки фото и векторизации.
-- Работает поиск "похожих" через API (Swagger).
-
-### Этап 2: MVP (Web + Mobile базовый)
-- Готов веб-кабинет: можно создать ивент и залить фото.
-- Готово моб. приложение: можно сделать селфи и увидеть ленту.
-- Интеграция с Cloudflare R2.
-
-### Этап 3: Релиз
-- Полировка UI/UX.
-- Тестирование нагрузки (10 000 фото).
-- Публикация в App Store / Google Play.
+**Stop searching. Start sharing.** ✨

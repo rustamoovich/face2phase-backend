@@ -14,6 +14,13 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "fallback_secret_key_for_dev_only"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
+    # Cloudflare R2 (S3-compatible storage)
+    R2_ENDPOINT_URL: str = ""
+    R2_ACCESS_KEY_ID: str = ""
+    R2_SECRET_ACCESS_KEY: str = ""
+    R2_BUCKET_NAME: str = "face2phase"
+    R2_PUBLIC_URL: Optional[str] = None  # Для публичного доступа к файлам
+
     @property
     def assemble_db_url(self) -> str:
         if self.DATABASE_URL:
