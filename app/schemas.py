@@ -14,6 +14,7 @@ class UserCreate(UserBase):
 class UserResponse(UserBase):
     id: uuid.UUID
     role: str
+    is_active: bool
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -65,6 +66,45 @@ class BiometricsUploadResponse(BaseModel):
     status: str
     message: str
     confidence: float
+
+class BiometricsInfoResponse(BaseModel):
+    """
+    Информация о биометрии пользователя.
+    
+    ⚠️ ВАЖНО: source_image_path всегда NULL
+    Исходные селфи не хранятся (политика безопасности).
+    Только векторы (эмбеддинги).
+    """
+    id: uuid.UUID
+    user_id: uuid.UUID
+    has_biometrics: bool
+    source_image_path: Optional[str] = None  # Всегда NULL (не храним селфи)
+    created_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
+class BiometricsDeleteResponse(BaseModel):
+    """Ответ на удаление биометрии"""
+    status: str
+    message: str
+    deleted_biometrics: bool
+    deleted_image_from_storage: bool
+
+class ProfileDeleteResponse(BaseModel):
+    """Ответ на удаление профиля"""
+    status: str
+    message: str
+    deleted_user_id: uuid.UUID
+    deleted_biometrics: bool
+    deleted_events_count: int
+    deleted_media_count: int
+
+class DeactivateResponse(BaseModel):
+    """Ответ на деактивацию профиля организатора"""
+    status: str
+    message: str
+    user_id: uuid.UUID
+    is_active: bool
 
 # Feed schemas
 class FaceMatchResult(BaseModel):

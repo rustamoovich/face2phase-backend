@@ -40,6 +40,29 @@ async def init_models():
             print("✅ Индекс на user_biometrics.user_id создан")
         except Exception as e:
             print(f"⚠️ Ошибка: {e}")
+        
+        # 5. Добавление колонки is_active для существующих таблиц
+        print("\n5️⃣ Проверка и добавление колонки is_active...")
+        try:
+            # Проверка существования колонки
+            result = await conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='users' AND column_name='is_active';
+            """))
+            column_exists = result.fetchone()
+            
+            if not column_exists:
+                print("   Колонка is_active не найдена, добавляем...")
+                await conn.execute(text("""
+                    ALTER TABLE users 
+                    ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT true;
+                """))
+                print("✅ Колонка is_active добавлена")
+            else:
+                print("✅ Колонка is_active уже существует")
+        except Exception as e:
+            print(f"⚠️ Ошибка при добавлении is_active: {e}")
     
     print("\n🎉 База данных успешно инициализирована!")
     print("\n📊 Следующие шаги:")

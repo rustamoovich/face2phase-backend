@@ -138,7 +138,10 @@ face2phase-backend/
 │   ├── schemas.py              # Pydantic схемы
 │   └── main.py                 # Точка входа FastAPI
 ├── docs/
-│   └── CLOUDFLARE_R2_SETUP.md  # Инструкция по настройке R2
+│   ├── CLOUDFLARE_R2_SETUP.md     # Инструкция по настройке R2
+│   ├── HNSW_INDEXING.md           # HNSW индексирование для pgvector
+│   ├── PRIVACY_AND_PROFILE.md     # Управление профилем и приватностью
+│   └── BIOMETRIC_SECURITY_POLICY.md # Политика безопасности биометрии
 ├── docker-compose.yml          # PostgreSQL + pgvector
 ├── requirements.txt            # Зависимости Python
 ├── init_db.py                  # Скрипт инициализации БД
@@ -155,9 +158,14 @@ face2phase-backend/
 | Метод | Endpoint | Описание |
 |-------|----------|----------|
 | POST | `/auth/register` | Регистрация пользователя |
-| POST | `/auth/login` | Вход (получение JWT токена) |
-| GET | `/auth/me` | Получить текущего пользователя |
-| POST | `/auth/biometrics` | Загрузить селфи для биометрии |
+| POST | `/auth/login` | Вход (получение JWT токена, автоматическая реактивация) |
+| GET | `/auth/me` | Получить текущего пользователя (включая статус is_active) |
+| GET | `/auth/biometrics` | Получить информацию о биометрии |
+| POST | `/auth/biometrics` | Загрузить селфи (первичная загрузка) |
+| PUT | `/auth/biometrics` | Обновить селфи |
+| DELETE | `/auth/biometrics` | Удалить биометрию (hard delete) |
+| DELETE | `/auth/profile` | Удалить профиль полностью (⚠️ только для обычных пользователей) |
+| DELETE | `/auth/deactivate` | Деактивировать профиль (⚠️ только для организаторов) |
 
 ### 🎉 Мероприятия
 

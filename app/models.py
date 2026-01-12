@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date, 
     Text, 
     Float, 
+    Boolean,
     ForeignKey,
     func
 )
@@ -26,6 +27,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[Optional[str]] = mapped_column(String(100))
     role: Mapped[str] = mapped_column(String(20), server_default="user")
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

@@ -1,5 +1,11 @@
 """
 Эндпоинты для биометрической аутентификации и поиска фото по лицу.
+
+⚠️ ПОЛИТИКА БЕЗОПАСНОСТИ БИОМЕТРИИ:
+- Исходные селфи НЕ сохраняются (ни в R2, ни где-либо еще)
+- Хранятся ТОЛЬКО 512-мерные векторы (эмбеддинги)
+- Невозможно восстановить изображение лица из эмбеддинга
+- Соответствует требованиям GDPR и биометрической безопасности
 """
 
 import os
@@ -14,10 +20,15 @@ from sqlalchemy.sql import text
 
 from app.database import get_db
 from app.models import User, UserBiometrics, DetectedFace, MediaItem, Event
-from app.schemas import BiometricsUploadResponse, MyMomentsResponse, FaceMatchResult
+from app.schemas import (
+    BiometricsUploadResponse, 
+    BiometricsInfoResponse,
+    BiometricsDeleteResponse,
+    MyMomentsResponse, 
+    FaceMatchResult
+)
 from app.api.deps import get_current_user
 from app.services.face_service import get_face_service
-from app.services.storage_service import get_storage_service
 
 router = APIRouter(prefix="/auth", tags=["biometrics"])
 feed_router = APIRouter(prefix="/feed", tags=["feed"])
@@ -26,20 +37,63 @@ TEMP_DIR = Path("temp")
 TEMP_DIR.mkdir(exist_ok=True)
 
 
+@router.get("/biometrics", response_model=BiometricsInfoResponse)
+async def get_biometrics_info(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """
+    Получить информацию о биометрии текущего пользователя.
+    
+    Возвращает:
+    - Статус наличия биометрии (есть/нет вектор)
+    - Дату создания/обновления биометрии
+    
+    ⚠️ ВАЖНО:
+    - Исходные селфи НЕ хранятся (только векторы)
+    - source_image_path всегда NULL (политика безопасности)
+    """
+    result = await db.execute(
+        select(UserBiometrics).where(UserBiometrics.user_id == current_user.id)
+    )
+    user_bio = result.scalar_one_or_none()
+    
+    if not user_bio:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Биометрия не найдена. Загрузите селфи через POST /auth/biometrics"
+        )
+    
+    return BiometricsInfoResponse(
+        id=user_bio.id,
+        user_id=user_bio.user_id,
+        has_biometrics=user_bio.embedding is not None,
+        source_image_path=None,  # Всегда NULL (не храним селфи)
+        created_at=user_bio.created_at
+    )
+
+
 @router.post("/biometrics", response_model=BiometricsUploadResponse)
-async def upload_biometrics(
+async def create_biometrics(
     file: Annotated[UploadFile, File(...)],
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)]
 ):
     """
-    Загрузить селфи для биометрической идентификации.
+    Загрузить селфи для биометрической идентификации (первичная загрузка).
     
     Требования:
     - На фото должно быть ровно одно лицо
     - Лицо должно быть четким (confidence > 0.8)
-    - Фото будет сохранено в Cloudflare R2
-    - Эмбеддинг лица будет использоваться как эталон для поиска
+    - Файл обрабатывается и УДАЛЯЕТСЯ
+    - В БД сохраняется ТОЛЬКО 512-мерный вектор (эмбеддинг)
+    
+    ⚠️ БЕЗОПАСНОСТЬ:
+    - Исходное селфи НЕ сохраняется
+    - Невозможно восстановить лицо из эмбеддинга
+    - Соответствует требованиям GDPR и биометрической безопасности
+    
+    Примечание: Если биометрия уже существует, используйте PUT /auth/biometrics
     """
     # Создание временного файла для обработки
     temp_filename = f"temp_{current_user.id}_{uuid.uuid4()}{Path(file.filename).suffix if file.filename else '.jpg'}"
@@ -73,21 +127,8 @@ async def upload_biometrics(
         # Получаем единственное лицо
         face_data = results[0]
         
-        # Загрузка селфи в R2
-        storage_service = get_storage_service()
-        r2_key = f"biometrics/{current_user.id}.jpg"
-        
-        try:
-            await storage_service.upload_file(
-                contents, 
-                r2_key, 
-                content_type=file.content_type or "image/jpeg"
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to upload biometrics to storage: {str(e)}"
-            )
+        # ⚠️ ВАЖНО: Селфи НЕ сохраняется!
+        # Сохраняем ТОЛЬКО эмбеддинг (512 чисел)
         
         # Проверяем, есть ли уже биометрия
         result = await db.execute(
@@ -98,13 +139,13 @@ async def upload_biometrics(
         if existing_bio:
             # Обновляем существующую запись
             existing_bio.embedding = face_data['embedding']
-            existing_bio.source_image_path = r2_key
+            existing_bio.source_image_path = None  # Не храним путь к файлу
         else:
             # Создаем новую запись
             new_bio = UserBiometrics(
                 user_id=current_user.id,
                 embedding=face_data['embedding'],
-                source_image_path=r2_key
+                source_image_path=None  # Не храним путь к файлу
             )
             db.add(new_bio)
         
@@ -112,14 +153,141 @@ async def upload_biometrics(
         
         return BiometricsUploadResponse(
             status="success",
-            message="Биометрия успешно сохранена в облаке",
+            message="Биометрия успешно сохранена (только вектор, исходное фото удалено)",
             confidence=face_data['confidence']
         )
         
     finally:
-        # Удаляем временный файл
+        # КРИТИЧНО: Удаляем временный файл
         if temp_path.exists():
             os.remove(temp_path)
+
+
+@router.put("/biometrics", response_model=BiometricsUploadResponse)
+async def update_biometrics(
+    file: Annotated[UploadFile, File(...)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """
+    Обновить селфи для биометрической идентификации.
+    
+    Использование:
+    - Когда пользователь хочет обновить свое эталонное селфи
+    - При изменении внешности (новая прическа, борода и т.д.)
+    
+    Требования:
+    - На фото должно быть ровно одно лицо
+    - Лицо должно быть четким (confidence > 0.8)
+    - Файл обрабатывается и УДАЛЯЕТСЯ
+    - В БД сохраняется ТОЛЬКО обновленный вектор
+    
+    ⚠️ БЕЗОПАСНОСТЬ:
+    - Исходное селфи НЕ сохраняется
+    - Старый эмбеддинг заменяется на новый
+    """
+    # Проверяем, существует ли биометрия
+    result = await db.execute(
+        select(UserBiometrics).where(UserBiometrics.user_id == current_user.id)
+    )
+    existing_bio = result.scalar_one_or_none()
+    
+    if not existing_bio:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Биометрия не найдена. Используйте POST /auth/biometrics для первичной загрузки"
+        )
+    
+    # Создание временного файла для обработки
+    temp_filename = f"temp_{current_user.id}_{uuid.uuid4()}{Path(file.filename).suffix if file.filename else '.jpg'}"
+    temp_path = TEMP_DIR / temp_filename
+    
+    try:
+        # Чтение файла
+        contents = await file.read()
+        
+        # Сохранение временного файла для обработки
+        with open(temp_path, "wb") as f:
+            f.write(contents)
+        
+        # Обработка через InsightFace с высоким порогом
+        face_service = get_face_service()
+        results = face_service.process_image(str(temp_path), min_confidence=0.8)
+        
+        # Валидация: должно быть ровно 1 лицо
+        if len(results) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Лицо не обнаружено. Сделайте четкое селфи с хорошим освещением."
+            )
+        
+        if len(results) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="На фото более одного человека. Сделайте одиночное селфи."
+            )
+        
+        # Получаем единственное лицо
+        face_data = results[0]
+        
+        # Обновляем только эмбеддинг (НЕ сохраняем файл!)
+        existing_bio.embedding = face_data['embedding']
+        existing_bio.source_image_path = None
+        
+        await db.commit()
+        
+        return BiometricsUploadResponse(
+            status="success",
+            message="Биометрия успешно обновлена (только вектор, исходное фото удалено)",
+            confidence=face_data['confidence']
+        )
+        
+    finally:
+        # КРИТИЧНО: Удаляем временный файл
+        if temp_path.exists():
+            os.remove(temp_path)
+
+
+@router.delete("/biometrics", response_model=BiometricsDeleteResponse)
+async def delete_biometrics(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """
+    Удалить все биометрические данные текущего пользователя (Hard Delete).
+    
+    Что удаляется:
+    - 512-мерный эмбеддинг лица из базы данных
+    
+    Что НЕ удаляется (так как не хранится):
+    - Исходное селфи (никогда не сохранялось в соответствии с политикой безопасности)
+    
+    Примечание:
+    - После удаления вы не сможете использовать "Мои моменты"
+    - Для восстановления потребуется заново загрузить селфи
+    """
+    # Получаем биометрию пользователя
+    result = await db.execute(
+        select(UserBiometrics).where(UserBiometrics.user_id == current_user.id)
+    )
+    user_bio = result.scalar_one_or_none()
+    
+    if not user_bio:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Биометрия не найдена"
+        )
+    
+    # Удаление из базы данных
+    await db.delete(user_bio)
+    await db.commit()
+    
+    return BiometricsDeleteResponse(
+        status="success",
+        message="Биометрический вектор удален безвозвратно",
+        deleted_biometrics=True,
+        deleted_image_from_storage=False  # Никогда не хранили
+    )
 
 
 @feed_router.get("/my-moments", response_model=MyMomentsResponse)

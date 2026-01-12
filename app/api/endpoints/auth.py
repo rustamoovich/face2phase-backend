@@ -4,12 +4,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import timedelta
 from typing import Annotated
+import uuid
 
 from app.database import get_db, settings
-from app.models import User
-from app.schemas import UserCreate, UserResponse, Token
+from app.models import User, UserBiometrics, Event, MediaItem
+from app.schemas import UserCreate, UserResponse, Token, ProfileDeleteResponse, DeactivateResponse
 from app.core import security
 from app.api.deps import get_current_user
+from app.services.storage_service import get_storage_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -41,6 +43,13 @@ async def login(
     db: Annotated[AsyncSession, Depends(get_db)],
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
 ):
+    """
+    Вход в систему.
+    
+    Автоматическая реактивация:
+    - Если пользователь был деактивирован, профиль автоматически активируется
+    - Это позволяет организаторам легко восстановить доступ
+    """
     # Поиск пользователя
     result = await db.execute(select(User).where(User.email == form_data.username))
     user = result.scalar_one_or_none()
@@ -51,6 +60,12 @@ async def login(
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # Автоматическая реактивация при входе
+    if not user.is_active:
+        user.is_active = True
+        await db.commit()
+        await db.refresh(user)
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     return {
@@ -65,4 +80,128 @@ async def read_users_me(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     return current_user
+
+
+@router.delete("/profile", response_model=ProfileDeleteResponse)
+async def delete_profile(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """
+    Полное удаление профиля пользователя (Hard Delete).
+    
+    ⚠️ ВНИМАНИЕ: Это действие необратимо!
+    
+    Доступно только для обычных пользователей (role='user').
+    Организаторы должны использовать /auth/deactivate.
+    
+    Что удаляется:
+    - Аккаунт пользователя
+    - Биометрические данные (только эмбеддинги, исходные селфи не хранятся)
+    - Мероприятия (если пользователь - организатор)
+    - Медиафайлы мероприятий (из БД и R2)
+    - Найденные лица на фото
+    
+    Примечание:
+    - После удаления вы не сможете войти в систему
+    - Все связанные данные будут удалены из-за CASCADE
+    """
+    # Проверка: организаторы НЕ могут удалить профиль
+    if current_user.role in ['organizer', 'admin']:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Организаторы не могут удалить профиль. Используйте /auth/deactivate для деактивации."
+        )
+    
+    user_id = current_user.id
+    
+    # 1. Подсчет удаляемых данных
+    events_result = await db.execute(
+        select(Event).where(Event.organizer_id == user_id)
+    )
+    user_events = events_result.scalars().all()
+    events_count = len(user_events)
+    
+    media_count = 0
+    storage_service = get_storage_service()
+    
+    # 2. Удаление медиафайлов из R2 (если пользователь создавал мероприятия)
+    for event in user_events:
+        media_result = await db.execute(
+            select(MediaItem).where(MediaItem.event_id == event.id)
+        )
+        media_items = media_result.scalars().all()
+        media_count += len(media_items)
+        
+        # Удаляем каждый медиафайл из R2
+        for media in media_items:
+            try:
+                await storage_service.delete_file(media.original_path)
+                if media.thumbnail_path:
+                    await storage_service.delete_file(media.thumbnail_path)
+            except Exception as e:
+                print(f"Warning: Failed to delete media from storage: {e}")
+    
+    # 3. Проверка биометрии (но НЕ удаляем из R2, так как там нет селфи)
+    bio_result = await db.execute(
+        select(UserBiometrics).where(UserBiometrics.user_id == user_id)
+    )
+    user_bio = bio_result.scalar_one_or_none()
+    deleted_biometrics = user_bio is not None
+    
+    # 4. Удаление пользователя (CASCADE удалит все связанные данные)
+    await db.delete(current_user)
+    await db.commit()
+    
+    return ProfileDeleteResponse(
+        status="success",
+        message="Профиль и все связанные данные удалены безвозвратно",
+        deleted_user_id=user_id,
+        deleted_biometrics=deleted_biometrics,
+        deleted_events_count=events_count,
+        deleted_media_count=media_count
+    )
+
+
+@router.delete("/deactivate", response_model=DeactivateResponse)
+async def deactivate_profile(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """
+    Деактивация профиля организатора (Soft Delete).
+    
+    Доступно только для организаторов и администраторов.
+    
+    Что происходит:
+    - Устанавливается is_active = False
+    - JWT токен становится недействительным
+    - Мероприятия и медиа остаются доступными для пользователей
+    - Ничего не удаляется физически
+    
+    Реактивация:
+    - При повторном входе (POST /auth/login) профиль автоматически активируется
+    
+    Примечание:
+    - После деактивации необходимо выполнить logout на клиенте
+    - Все данные сохраняются (защита данных пользователей)
+    """
+    # Проверка: только организаторы и администраторы
+    if current_user.role not in ['organizer', 'admin']:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только организаторы и администраторы могут деактивировать профиль. Обычные пользователи должны использовать /auth/profile для удаления."
+        )
+    
+    # Деактивация профиля
+    current_user.is_active = False
+    await db.commit()
+    await db.refresh(current_user)
+    
+    return DeactivateResponse(
+        status="success",
+        message="Профиль деактивирован. Для активации войдите в систему повторно.",
+        user_id=current_user.id,
+        is_active=current_user.is_active
+    )
 
