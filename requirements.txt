@@ -17,4 +17,6 @@ opencv-python-headless
 numpy
 boto3
 aioboto3
+Pillow
+PyMuPDF
 

@@ -101,7 +101,7 @@ R2_PUBLIC_URL=https://cdn.yourdomain.com
 ### 6. Инициализация базы данных
 
 ```bash
-python init_db.py
+python scripts/init_db.py
 ```
 
 ### 7. Запуск сервера
@@ -131,12 +131,16 @@ face2phase-backend/
 │   ├── core/
 │   │   └── security.py         # JWT, хэширование паролей
 │   ├── services/
-│   │   ├── face_service.py     # InsightFace обработка
-│   │   └── storage_service.py  # Cloudflare R2 интеграция
+│   │   ├── face_service.py            # InsightFace обработка
+│   │   ├── storage_service.py         # Cloudflare R2 интеграция
+│   │   └── media_processing_service.py # Thumbnails и PDF превью
 │   ├── database.py             # Конфигурация БД
 │   ├── models.py               # SQLAlchemy модели
 │   ├── schemas.py              # Pydantic схемы
 │   └── main.py                 # Точка входа FastAPI
+├── scripts/
+│   ├── migrate_to_hnsw.py         # Миграция IVFFlat → HNSW
+│   └── migrate_media_structure.py # Добавление полей для thumbnails
 ├── docs/
 │   ├── CLOUDFLARE_R2_SETUP.md     # Инструкция по настройке R2
 │   ├── HNSW_INDEXING.md           # HNSW индексирование для pgvector
@@ -179,8 +183,9 @@ face2phase-backend/
 
 | Метод | Endpoint | Описание |
 |-------|----------|----------|
-| POST | `/events/{event_id}/upload` | Загрузить фото/видео (массовая загрузка) |
+| POST | `/events/{event_id}/upload` | Загрузить фото/видео/PDF (с автогенерацией thumbnails) |
 | GET | `/events/media/{media_item_id}/faces` | Получить найденные лица на фото |
+| GET | `/events/media/{media_item_id}/download` | Скачать оригинальный файл (полный размер) |
 
 ### 🔍 Поиск
 

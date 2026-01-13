@@ -126,6 +126,7 @@ async def delete_profile(
     storage_service = get_storage_service()
     
     # 2. Удаление медиафайлов из R2 (если пользователь создавал мероприятия)
+    files_to_delete = []
     for event in user_events:
         media_result = await db.execute(
             select(MediaItem).where(MediaItem.event_id == event.id)
@@ -133,14 +134,26 @@ async def delete_profile(
         media_items = media_result.scalars().all()
         media_count += len(media_items)
         
-        # Удаляем каждый медиафайл из R2
+        # Собираем все файлы для удаления
         for media in media_items:
-            try:
-                await storage_service.delete_file(media.original_path)
-                if media.thumbnail_path:
-                    await storage_service.delete_file(media.thumbnail_path)
-            except Exception as e:
-                print(f"Warning: Failed to delete media from storage: {e}")
+            # Оригинал
+            if media.original_path:
+                files_to_delete.append(media.original_path)
+            # Thumbnails
+            if media.small_thumbnail_path:
+                files_to_delete.append(media.small_thumbnail_path)
+            if media.medium_thumbnail_path:
+                files_to_delete.append(media.medium_thumbnail_path)
+            # Preview (для PDF)
+            if media.preview_path:
+                files_to_delete.append(media.preview_path)
+    
+    # Удаляем все файлы разом (batch delete)
+    if files_to_delete:
+        try:
+            await storage_service.delete_multiple_files(files_to_delete)
+        except Exception as e:
+            print(f"Warning: Failed to delete media from storage: {e}")
     
     # 3. Проверка биометрии (но НЕ удаляем из R2, так как там нет селфи)
     bio_result = await db.execute(

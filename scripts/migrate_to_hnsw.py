@@ -10,6 +10,13 @@ HNSW (Hierarchical Navigable Small World) обеспечивает:
     python scripts/migrate_to_hnsw.py
 """
 
+import sys
+from pathlib import Path
+
+# Добавляем корневую директорию проекта в PYTHONPATH
+root_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(root_dir))
+
 import asyncio
 from sqlalchemy import text
 from app.database import AsyncSessionLocal

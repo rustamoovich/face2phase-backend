@@ -1,7 +1,7 @@
 # 🎉 Face2Phase Backend - Статус проекта
 
-**Дата:** 12.01.2026  
-**Версия:** 1.1 (Account Management Update)  
+**Дата:** 13.01.2026  
+**Версия:** 1.2 (Media Processing & Thumbnails)  
 **Статус:** ✅ Production Ready
 
 ---
@@ -32,10 +32,13 @@
 - ✅ Role-based access control (RBAC)
 
 ### 4. Загрузка медиафайлов
-- ✅ Массовая загрузка фото/видео
-- ✅ Сохранение в Cloudflare R2
+- ✅ Массовая загрузка фото/видео/PDF
+- ✅ Сохранение в Cloudflare R2 с структурированной организацией
+- ✅ Автоматическая генерация thumbnails (маленький + средний)
+- ✅ Извлечение первой страницы PDF как превью
 - ✅ Автоматическая обработка лиц (background tasks)
 - ✅ Статусы обработки (pending, processed, failed, no_faces)
+- ✅ Endpoint скачивания оригинала
 
 ### 5. Распознавание лиц (AI)
 - ✅ InsightFace (buffalo_l) детекция
@@ -54,8 +57,17 @@
 ### 7. Облачное хранилище
 - ✅ Интеграция Cloudflare R2 (S3-compatible)
 - ✅ Нулевая стоимость исходящего трафика
-- ✅ Асинхронная загрузка файлов (aioboto3)
-- ✅ Структурированное хранение (events/{id}/original/)
+- ✅ Асинхронная загрузка/скачивание файлов (aioboto3)
+- ✅ Структурированное хранение:
+  ```
+  events/{event_id}/
+    ├── photos/original/      # Оригиналы фото
+    ├── photos/thumbnails/    # Сжатые копии (small + medium)
+    ├── videos/original/      # Оригиналы видео
+    ├── videos/posters/       # Заставки для видео (TODO)
+    ├── documents/files/      # PDF презентации
+    └── documents/previews/   # Первая страница PDF
+  ```
 
 ### 8. База данных
 - ✅ PostgreSQL 15+ с pgvector
@@ -75,17 +87,18 @@
 ### 10. Документация
 - ✅ Swagger UI (/docs)
 - ✅ README.md с быстрым стартом
-- ✅ TZ.md с техническим заданием
+- ✅ docs/TZ.md с техническим заданием
 - ✅ docs/PROJECT_STATUS.md (статус проекта)
 - ✅ docs/CLOUDFLARE_R2_SETUP.md
 - ✅ docs/HNSW_INDEXING.md
 - ✅ docs/PRIVACY_AND_PROFILE.md
 - ✅ docs/BIOMETRIC_SECURITY_POLICY.md
+- ✅ docs/MEDIA_PROCESSING.md (обработка медиа и thumbnails)
 
 ### 11. Инфраструктура
 - ✅ Docker Compose для PostgreSQL
 - ✅ .env для конфигурации
-- ✅ Скрипты инициализации (init_db.py)
+- ✅ Скрипты инициализации (scripts/init_db.py)
 - ✅ Скрипты миграции (migrate_to_hnsw.py)
 - ✅ Утилиты (update_user_role.py, check_faces.py)
 
@@ -126,22 +139,27 @@ face2phase-backend/
 │   ├── core/
 │   │   └── security.py           ✅ JWT, хэширование
 │   ├── services/
-│   │   ├── face_service.py       ✅ InsightFace обработка
-│   │   └── storage_service.py    ✅ Cloudflare R2 клиент
+│   │   ├── face_service.py            ✅ InsightFace обработка
+│   │   ├── storage_service.py         ✅ Cloudflare R2 клиент
+│   │   └── media_processing_service.py ✅ Thumbnails & PDF превью
 │   ├── database.py               ✅ Async SQLAlchemy + Settings
 │   ├── models.py                 ✅ ORM модели (5 таблиц)
 │   ├── schemas.py                ✅ Pydantic валидация
 │   └── main.py                   ✅ FastAPI app
 ├── docs/
-│   ├── CLOUDFLARE_R2_SETUP.md    ✅ Настройка R2
-│   ├── HNSW_INDEXING.md          ✅ Векторное индексирование
-│   ├── PRIVACY_AND_PROFILE.md   ✅ Управление профилем
-│   └── BIOMETRIC_SECURITY_POLICY.md ✅ Политика безопасности биометрии
+│   ├── TZ.md                          ✅ Техническое задание
+│   ├── PROJECT_STATUS.md              ✅ Статус проекта
+│   ├── CLOUDFLARE_R2_SETUP.md         ✅ Настройка R2
+│   ├── HNSW_INDEXING.md               ✅ Векторное индексирование
+│   ├── PRIVACY_AND_PROFILE.md         ✅ Управление профилем
+│   ├── BIOMETRIC_SECURITY_POLICY.md   ✅ Политика безопасности биометрии
+│   └── MEDIA_PROCESSING.md            ✅ Обработка медиа и thumbnails
 ├── scripts/
-│   └── migrate_to_hnsw.py        ✅ Миграция IVFFlat → HNSW
+│   ├── init_db.py                   ✅ Инициализация БД + HNSW
+│   ├── migrate_to_hnsw.py           ✅ Миграция IVFFlat → HNSW
+│   └── migrate_media_structure.py   ✅ Добавление полей thumbnails
 ├── docker-compose.yml            ✅ PostgreSQL + pgvector
-├── requirements.txt              ✅ 19 зависимостей
-├── init_db.py                    ✅ Инициализация БД + HNSW
+├── requirements.txt              ✅ 21 зависимостей (+ Pillow, PyMuPDF)
 ├── update_user_role.py           ✅ Утилита смены ролей
 ├── check_faces.py                ✅ Проверка детекции
 ├── README.md                     ✅ Документация проекта
@@ -189,7 +207,7 @@ R2_BUCKET_NAME=face2phase
 
 ### 4. Инициализация БД
 ```bash
-python init_db.py
+python scripts/init_db.py
 ```
 
 ### 5. Запуск сервера
@@ -220,8 +238,9 @@ uvicorn app.main:app --reload
 - `GET /events/{event_id}/media` - Медиафайлы мероприятия
 
 ### Медиа
-- `POST /events/{event_id}/upload` - Загрузка фото/видео
+- `POST /events/{event_id}/upload` - Загрузка фото/видео/PDF (с thumbnails)
 - `GET /events/media/{media_item_id}/faces` - Детекция лиц
+- `GET /events/media/{media_item_id}/download` - Скачать оригинал
 
 ### Поиск
 - `GET /feed/my-moments` - "Мои моменты" (векторный поиск)
@@ -231,7 +250,8 @@ uvicorn app.main:app --reload
 ## 📈 Следующие шаги (Post-MVP)
 
 ### Высокий приоритет
-- [ ] Генерация thumbnail для фото
+- ✅ ~~Генерация thumbnail для фото~~ (реализовано: small + medium)
+- ✅ ~~Поддержка PDF презентаций~~ (реализовано: с превью первой страницы)
 - [ ] Presigned URLs для скачивания из R2
 - [ ] Celery для масштабируемой обработки фото
 - [ ] Redis для кэширования результатов поиска
@@ -239,7 +259,7 @@ uvicorn app.main:app --reload
 - [ ] Фильтрация по событиям в ленте
 
 ### Средний приоритет
-- [ ] Обработка видео (покадровая детекция)
+- [ ] Обработка видео (покадровая детекция + poster extraction)
 - [ ] Аналитика для организаторов (дашборд)
 - [ ] Экспорт данных (CSV, JSON)
 - [ ] Webhook уведомления (обработка завершена)

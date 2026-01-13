@@ -345,7 +345,8 @@ async def get_my_moments(
             df.media_item_id,
             mi.event_id,
             mi.original_path,
-            mi.thumbnail_path,
+            mi.small_thumbnail_path,
+            mi.medium_thumbnail_path,
             e.title as event_title,
             df.embedding <=> :user_embedding as distance
         FROM detected_faces df
@@ -375,7 +376,8 @@ async def get_my_moments(
             event_id=row.event_id,
             event_title=row.event_title,
             similarity_score=1.0 - float(row.distance),  # Преобразуем distance в similarity
-            thumbnail_path=row.thumbnail_path,
+            small_thumbnail_path=row.small_thumbnail_path,
+            medium_thumbnail_path=row.medium_thumbnail_path,
             original_path=row.original_path
         ))
     

@@ -13,6 +13,7 @@ from app.schemas import MediaUploadResponse, MediaItemResponse
 from app.api.deps import get_current_user
 from app.services.face_service import get_face_service
 from app.services.storage_service import get_storage_service
+from app.services.media_processing_service import MediaProcessingService
 
 router = APIRouter(prefix="/events", tags=["media"])
 
@@ -87,13 +88,24 @@ async def upload_media(
     current_user: Annotated[User, Depends(get_current_user)]
 ):
     """
-    Загрузить медиафайлы (фото/видео) для мероприятия.
+    Загрузить медиафайлы (фото/видео/PDF) для мероприятия.
+    
+    Структура хранения в R2:
+    - Фото: events/{event_id}/photos/original/{uuid}.jpg
+            events/{event_id}/photos/thumbnails/small_{uuid}.jpg
+            events/{event_id}/photos/thumbnails/medium_{uuid}.jpg
+    - Видео: events/{event_id}/videos/original/{uuid}.mp4
+             events/{event_id}/videos/posters/{uuid}.jpg (TODO)
+    - PDF: events/{event_id}/documents/files/{uuid}.pdf
+           events/{event_id}/documents/previews/{uuid}.jpg
     
     Требования:
     - Пользователь должен быть организатором этого мероприятия
     - Поддерживается загрузка множественных файлов
     - Файлы сохраняются в Cloudflare R2
-    - После загрузки автоматически запускается обработка лиц
+    - Автоматически создаются thumbnails для фото
+    - Автоматически извлекается первая страница PDF
+    - После загрузки фото автоматически запускается обработка лиц
     """
     # Проверка существования мероприятия
     result = await db.execute(select(Event).where(Event.id == event_id))
@@ -113,43 +125,109 @@ async def upload_media(
         )
     
     storage_service = get_storage_service()
+    media_processor = MediaProcessingService()
     uploaded_media_ids = []
     
     for file in files:
-        # Определение типа медиа
-        content_type = file.content_type or "application/octet-stream"
-        media_type = "video" if content_type.startswith("video/") else "image"
-        
-        # Генерация уникального имени файла
-        file_extension = Path(file.filename).suffix if file.filename else ""
-        unique_filename = f"{uuid.uuid4()}{file_extension}"
-        
-        # Путь в R2: events/{event_id}/original/{unique_filename}
-        r2_key = f"events/{event_id}/original/{unique_filename}"
-        
         # Чтение файла
         try:
             contents = await file.read()
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to read file: {str(e)}"
+                detail=f"Failed to read file {file.filename}: {str(e)}"
             )
         
-        # Загрузка в R2
+        # Определение типа медиа
+        content_type = file.content_type or "application/octet-stream"
+        filename = file.filename or "unknown"
+        media_folder, file_type = media_processor.detect_media_type(content_type, filename)
+        
+        # Генерация уникального имени файла
+        unique_id = uuid.uuid4()
+        unique_filename = f"{unique_id}.{file_type}"
+        
+        # Путь для оригинала в R2
+        if media_folder == "photos":
+            original_key = media_processor.get_storage_path(
+                str(event_id), media_folder, "original", unique_filename
+            )
+            media_type = "image"
+        elif media_folder == "videos":
+            original_key = media_processor.get_storage_path(
+                str(event_id), media_folder, "original", unique_filename
+            )
+            media_type = "video"
+        elif media_folder == "documents":
+            original_key = media_processor.get_storage_path(
+                str(event_id), media_folder, "files", unique_filename
+            )
+            media_type = "document"
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported file type: {content_type}"
+            )
+        
+        # Загрузка оригинала в R2
         try:
-            await storage_service.upload_file(contents, r2_key, content_type)
+            await storage_service.upload_file(contents, original_key, content_type)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to upload file to storage: {str(e)}"
             )
         
-        # Создание записи в БД с ключом R2
+        # Инициализация путей для thumbnails/превью
+        small_thumbnail_key = None
+        medium_thumbnail_key = None
+        preview_key = None
+        
+        # Обработка фотографий: создание thumbnails
+        if media_folder == "photos":
+            try:
+                small_thumb, medium_thumb = media_processor.create_image_thumbnails(contents)
+                
+                # Загрузка small thumbnail
+                small_filename = f"small_{unique_id}.jpg"
+                small_thumbnail_key = media_processor.get_storage_path(
+                    str(event_id), media_folder, "thumbnails", small_filename
+                )
+                await storage_service.upload_file(small_thumb, small_thumbnail_key, "image/jpeg")
+                
+                # Загрузка medium thumbnail
+                medium_filename = f"medium_{unique_id}.jpg"
+                medium_thumbnail_key = media_processor.get_storage_path(
+                    str(event_id), media_folder, "thumbnails", medium_filename
+                )
+                await storage_service.upload_file(medium_thumb, medium_thumbnail_key, "image/jpeg")
+                
+            except Exception as e:
+                print(f"Warning: Failed to create thumbnails for {filename}: {str(e)}")
+        
+        # Обработка PDF: извлечение первой страницы
+        elif media_folder == "documents":
+            try:
+                preview_jpg = media_processor.extract_pdf_first_page(contents)
+                
+                preview_filename = f"{unique_id}.jpg"
+                preview_key = media_processor.get_storage_path(
+                    str(event_id), media_folder, "previews", preview_filename
+                )
+                await storage_service.upload_file(preview_jpg, preview_key, "image/jpeg")
+                
+            except Exception as e:
+                print(f"Warning: Failed to extract PDF preview for {filename}: {str(e)}")
+        
+        # Создание записи в БД
         db_media = MediaItem(
             event_id=event_id,
-            original_path=r2_key,  # Теперь храним ключ R2, а не локальный путь
+            original_path=original_key,
+            small_thumbnail_path=small_thumbnail_key,
+            medium_thumbnail_path=medium_thumbnail_key,
+            preview_path=preview_key,
             media_type=media_type,
+            file_type=file_type,
             ai_status="pending"
         )
         
@@ -157,10 +235,9 @@ async def upload_media(
         await db.flush()
         uploaded_media_ids.append(db_media.id)
         
-        # Для обработки лиц нужен локальный файл
-        # Сохраняем временно
-        if media_type == "image":
-            temp_file_path = TEMP_DIR / f"{db_media.id}{file_extension}"
+        # Запуск обработки лиц для фотографий
+        if media_folder == "photos":
+            temp_file_path = TEMP_DIR / f"{db_media.id}.{file_type}"
             with open(temp_file_path, "wb") as f:
                 f.write(contents)
             
@@ -229,9 +306,45 @@ async def get_detected_faces(
                 "id": str(face.id),
                 "confidence": face.confidence,
                 "bounding_box": face.bounding_box,
-                "embedding_size": len(face.embedding) if face.embedding else 0
+                "embedding_size": len(face.embedding) if face.embedding is not None else 0
             }
             for face in faces
         ]
+    }
+
+
+@router.get("/media/{media_item_id}/download")
+async def download_original(
+    media_item_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """
+    Скачать оригинальный файл (полный размер).
+    
+    Возвращает публичный URL для скачивания оригинала.
+    Используйте этот эндпоинт для кнопки "Скачать" в интерфейсе.
+    """
+    # Получение медиафайла
+    result = await db.execute(
+        select(MediaItem).where(MediaItem.id == media_item_id)
+    )
+    media_item = result.scalar_one_or_none()
+    
+    if not media_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Media item not found"
+        )
+    
+    # Генерация публичного URL
+    storage_service = get_storage_service()
+    download_url = storage_service.get_public_url(media_item.original_path)
+    
+    return {
+        "media_item_id": media_item_id,
+        "download_url": download_url,
+        "media_type": media_item.media_type,
+        "file_type": media_item.file_type
     }
 

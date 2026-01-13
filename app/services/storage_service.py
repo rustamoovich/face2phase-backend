@@ -66,6 +66,36 @@ class StorageService:
             except ClientError as e:
                 raise Exception(f"Failed to upload file to R2: {str(e)}")
     
+    async def download_file(self, file_key: str) -> bytes:
+        """
+        Скачать файл из R2.
+        
+        Args:
+            file_key: Ключ файла в bucket
+        
+        Returns:
+            Бинарные данные файла
+        
+        Raises:
+            Exception: Если скачивание не удалось
+        """
+        async with self.session.client(
+            "s3",
+            endpoint_url=self.endpoint_url,
+            aws_access_key_id=self.access_key_id,
+            aws_secret_access_key=self.secret_access_key,
+            region_name="auto"
+        ) as s3_client:
+            try:
+                response = await s3_client.get_object(
+                    Bucket=self.bucket_name,
+                    Key=file_key
+                )
+                async with response['Body'] as stream:
+                    return await stream.read()
+            except ClientError as e:
+                raise Exception(f"Failed to download file from R2: {str(e)}")
+    
     async def delete_file(self, file_key: str) -> None:
         """
         Удалить файл из R2.
@@ -90,6 +120,40 @@ class StorageService:
                 )
             except ClientError as e:
                 raise Exception(f"Failed to delete file from R2: {str(e)}")
+    
+    async def delete_multiple_files(self, file_keys: list[str]) -> None:
+        """
+        Удалить несколько файлов из R2.
+        
+        Args:
+            file_keys: Список ключей файлов в bucket
+        
+        Raises:
+            Exception: Если удаление не удалось
+        """
+        if not file_keys:
+            return
+        
+        async with self.session.client(
+            "s3",
+            endpoint_url=self.endpoint_url,
+            aws_access_key_id=self.access_key_id,
+            aws_secret_access_key=self.secret_access_key,
+            region_name="auto"
+        ) as s3_client:
+            try:
+                # S3 delete_objects принимает максимум 1000 объектов за раз
+                for i in range(0, len(file_keys), 1000):
+                    batch = file_keys[i:i+1000]
+                    await s3_client.delete_objects(
+                        Bucket=self.bucket_name,
+                        Delete={
+                            'Objects': [{'Key': key} for key in batch],
+                            'Quiet': True
+                        }
+                    )
+            except ClientError as e:
+                raise Exception(f"Failed to delete files from R2: {str(e)}")
     
     def get_public_url(self, file_key: str) -> str:
         """

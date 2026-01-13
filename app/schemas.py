@@ -50,8 +50,11 @@ class MediaItemResponse(BaseModel):
     id: uuid.UUID
     event_id: uuid.UUID
     original_path: str
-    thumbnail_path: Optional[str] = None
+    small_thumbnail_path: Optional[str] = None  # Small preview for feed
+    medium_thumbnail_path: Optional[str] = None  # Medium preview for viewing
+    preview_path: Optional[str] = None  # For PDF first page or video poster
     media_type: str
+    file_type: Optional[str] = None
     ai_status: str
     uploaded_at: datetime
 
@@ -112,7 +115,8 @@ class FaceMatchResult(BaseModel):
     event_id: uuid.UUID
     event_title: str
     similarity_score: float
-    thumbnail_path: Optional[str] = None
+    small_thumbnail_path: Optional[str] = None  # Small preview for feed
+    medium_thumbnail_path: Optional[str] = None  # Medium preview for viewing
     original_path: str
 
 class MyMomentsResponse(BaseModel):

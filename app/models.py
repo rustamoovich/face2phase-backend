@@ -75,9 +75,19 @@ class MediaItem(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"))
+    
+    # Paths in R2 storage
     original_path: Mapped[str] = mapped_column(String(255), nullable=False)
-    thumbnail_path: Mapped[Optional[str]] = mapped_column(String(255))
-    media_type: Mapped[str] = mapped_column(String(10), server_default="image")
+    thumbnail_path: Mapped[Optional[str]] = mapped_column(String(255))  # For backward compatibility
+    small_thumbnail_path: Mapped[Optional[str]] = mapped_column(String(255))  # Small preview for feed
+    medium_thumbnail_path: Mapped[Optional[str]] = mapped_column(String(255))  # Medium preview for viewing
+    preview_path: Mapped[Optional[str]] = mapped_column(String(255))  # For PDF first page or video poster
+    
+    # Media classification
+    media_type: Mapped[str] = mapped_column(String(10), server_default="image")  # image/video/document
+    file_type: Mapped[Optional[str]] = mapped_column(String(50))  # jpg, mp4, pdf, etc.
+    
+    # AI processing status
     ai_status: Mapped[str] = mapped_column(String(20), server_default="pending")
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
