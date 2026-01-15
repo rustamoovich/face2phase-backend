@@ -1,19 +1,47 @@
 import uuid
 from datetime import datetime, date
-from typing import Optional
-from pydantic import BaseModel, EmailStr, ConfigDict
+from typing import Optional, List
+from pydantic import BaseModel, EmailStr, ConfigDict, Field
 
+# Organization schemas
+class OrganizationBase(BaseModel):
+    name: str = Field(..., min_length=2, max_length=200)
+    slug: str = Field(..., min_length=2, max_length=200, pattern="^[a-z0-9-]+$")
+    description: Optional[str] = None
+    website: Optional[str] = None
+    contact_email: Optional[EmailStr] = None
+
+class OrganizationCreate(OrganizationBase):
+    pass
+
+class OrganizationUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=2, max_length=200)
+    description: Optional[str] = None
+    website: Optional[str] = None
+    contact_email: Optional[EmailStr] = None
+
+class OrganizationResponse(OrganizationBase):
+    id: uuid.UUID
+    logo_path: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+# User schemas
 class UserBase(BaseModel):
     email: EmailStr
     full_name: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
-    role: Optional[str] = "user"  # По умолчанию 'user', можно указать 'organizer' или 'admin'
+    role: Optional[str] = "user"  # user/photographer/organizer/admin
+    organization_id: Optional[uuid.UUID] = None
 
 class UserResponse(UserBase):
     id: uuid.UUID
     role: str
+    organization_id: Optional[uuid.UUID] = None
     is_active: bool
     created_at: datetime
 
@@ -27,20 +55,37 @@ class TokenPayload(BaseModel):
     sub: Optional[uuid.UUID] = None
 
 # Event schemas
+class PartnerData(BaseModel):
+    """Информация о партнере мероприятия"""
+    name: str
+    logo_path: Optional[str] = None
+    website: Optional[str] = None
+
 class EventBase(BaseModel):
-    title: str
+    title: str = Field(..., min_length=2, max_length=200)
     description: Optional[str] = None
     event_date: Optional[date] = None
     location: Optional[str] = None
+    status: Optional[str] = Field(default="draft", pattern="^(draft|published|archived)$")
 
 class EventCreate(EventBase):
-    pass
+    organization_id: uuid.UUID
+
+class EventUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=2, max_length=200)
+    description: Optional[str] = None
+    event_date: Optional[date] = None
+    location: Optional[str] = None
+    status: Optional[str] = Field(None, pattern="^(draft|published|archived)$")
+    partners_data: Optional[List[PartnerData]] = None
 
 class EventResponse(EventBase):
     id: uuid.UUID
-    organizer_id: uuid.UUID
+    organization_id: uuid.UUID
+    organizer_id: Optional[uuid.UUID] = None
     cover_image_path: Optional[str] = None
-    status: str
+    map_image_path: Optional[str] = None
+    partners_data: Optional[List[PartnerData]] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -123,3 +168,26 @@ class MyMomentsResponse(BaseModel):
     total_matches: int
     matches: list[FaceMatchResult]
 
+# Event Access schemas (photographer permissions)
+class EventAccessCreate(BaseModel):
+    """Предоставить фотографу доступ к событию"""
+    event_id: uuid.UUID
+    photographer_id: uuid.UUID
+
+class EventAccessResponse(BaseModel):
+    """Информация о доступе фотографа"""
+    id: uuid.UUID
+    event_id: uuid.UUID
+    photographer_id: uuid.UUID
+    granted_by: Optional[uuid.UUID] = None
+    granted_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+class PhotographerWithAccess(BaseModel):
+    """Фотограф с информацией о доступе"""
+    user_id: uuid.UUID
+    email: str
+    full_name: Optional[str] = None
+    granted_at: datetime
+    granted_by: Optional[uuid.UUID] = None

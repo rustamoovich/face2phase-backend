@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db, AsyncSessionLocal
-from app.models import Event, MediaItem, User, DetectedFace
+from app.models import Event, MediaItem, User, DetectedFace, EventAccess
 from app.schemas import MediaUploadResponse, MediaItemResponse
 from app.api.deps import get_current_user
 from app.services.face_service import get_face_service
@@ -100,7 +100,7 @@ async def upload_media(
            events/{event_id}/documents/previews/{uuid}.jpg
     
     Требования:
-    - Пользователь должен быть организатором этого мероприятия
+    - Organizer этой организации, photographer с доступом, или admin
     - Поддерживается загрузка множественных файлов
     - Файлы сохраняются в Cloudflare R2
     - Автоматически создаются thumbnails для фото
@@ -118,10 +118,29 @@ async def upload_media(
         )
     
     # Проверка прав доступа
-    if event.organizer_id != current_user.id and current_user.role != 'admin':
+    has_access = False
+    
+    if current_user.role == 'admin':
+        has_access = True
+    elif current_user.role == 'organizer':
+        # Organizer может загружать в события своей организации
+        if current_user.organization_id == event.organization_id:
+            has_access = True
+    elif current_user.role == 'photographer':
+        # Фотограф может загружать, если у него есть доступ к событию
+        access_result = await db.execute(
+            select(EventAccess).where(
+                EventAccess.event_id == event_id,
+                EventAccess.photographer_id == current_user.id
+            )
+        )
+        if access_result.scalar_one_or_none():
+            has_access = True
+    
+    if not has_access:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not enough privileges"
+            detail="You don't have access to upload media to this event"
         )
     
     storage_service = get_storage_service()

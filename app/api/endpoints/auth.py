@@ -17,7 +17,22 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
-    # ... (код регистрации остается прежним)
+    """
+    Регистрация обычного пользователя (role=user).
+    
+    Требуется только:
+    - email
+    - password
+    - full_name (optional)
+    
+    ⚠️ Поля role и organization_id ИГНОРИРУЮТСЯ
+    Роль автоматически устанавливается в 'user'.
+    Без привязки к организации.
+    
+    ⚠️ Для создания organizer/photographer используйте:
+    POST /organizations/{id}/users
+    """
+    # Проверка email
     result = await db.execute(select(User).where(User.email == user_in.email))
     if result.scalar_one_or_none():
         raise HTTPException(
@@ -25,11 +40,13 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
             detail="User with this email already exists"
         )
     
+    # Создание обычного пользователя
     db_user = User(
         email=user_in.email,
         password_hash=security.get_password_hash(user_in.password),
         full_name=user_in.full_name,
-        role=user_in.role  # Поддержка указания роли при регистрации
+        role="user",  # Всегда user для публичной регистрации
+        organization_id=None  # Обычные пользователи не привязаны к организации
     )
     
     db.add(db_user)
